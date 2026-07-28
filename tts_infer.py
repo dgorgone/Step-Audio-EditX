@@ -8,6 +8,7 @@ if torch.cuda.is_available():
 
 from tokenizer import StepAudioTokenizer
 from tts import StepAudioTTS
+from model_loader import ModelSource
 
 def get_args():
     parser = argparse.ArgumentParser(description="Step-Audio Edit Demo")

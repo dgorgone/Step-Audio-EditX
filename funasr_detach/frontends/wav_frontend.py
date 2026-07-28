@@ -343,7 +343,7 @@ class WavFrontendOnline(nn.Module):
             feats = []
             feats_lens = []
             for i in range(batch_size):
-                waveform = input[i].cuda()
+                waveform = input[i]
                 # we need accurate wave samples that used for fbank extracting
                 waveforms.append(
                     waveform[

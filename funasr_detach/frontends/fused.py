@@ -82,6 +82,8 @@ class FusedFrontends(nn.Module):
         self.factors = [frontend.hop_length // self.gcd for frontend in self.frontends]
         if torch.cuda.is_available():
             dev = "cuda"
+        elif torch.backends.mps.is_available():
+            dev = "mps"
         else:
             dev = "cpu"
         if self.align_method == "linear_projection":

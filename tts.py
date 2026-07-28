@@ -372,7 +372,11 @@ class StepAudioTTS:
             raise
 
     def preprocess_prompt_wav(self, prompt_wav_path: str):
-        prompt_wav, prompt_wav_sr = torchaudio.load(prompt_wav_path)
+        audio_np, prompt_wav_sr = sf.read(prompt_wav_path, dtype='float32')
+        if audio_np.ndim == 1:
+            prompt_wav = torch.from_numpy(audio_np).unsqueeze(0)
+        else:
+            prompt_wav = torch.from_numpy(audio_np.T)
         if prompt_wav.shape[0] > 1:
             prompt_wav = prompt_wav.mean(dim=0, keepdim=True)
 

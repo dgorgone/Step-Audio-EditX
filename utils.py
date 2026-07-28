@@ -153,7 +153,11 @@ def get_audio_tokens(audio_tokens: str) -> list[int]:
 
 
 def load_audio(audio_path: str):
-    audio_wav, sr = torchaudio.load(audio_path)
+    audio_np, sr = sf.read(audio_path, dtype='float32')
+    if audio_np.ndim == 1:
+        audio_wav = torch.from_numpy(audio_np).unsqueeze(0)
+    else:
+        audio_wav = torch.from_numpy(audio_np.T)
     audio_wav = audio_wav.mean(dim=0, keepdim=True)
     return audio_wav, sr
 

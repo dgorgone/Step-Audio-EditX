@@ -15,7 +15,14 @@ import torchaudio
 from model_loader import model_loader, ModelSource
 from config.prompts import AUDIO_EDIT_CLONE_SYSTEM_PROMPT_TPL, AUDIO_EDIT_SYSTEM_PROMPT
 from stepvocoder.cosyvoice2.cli.cosyvoice import CosyVoice
-from vllm import SamplingParams
+try:
+    from vllm import SamplingParams
+except ImportError:
+    class SamplingParams:
+        def __init__(self, temperature=0.7, max_tokens=4096, skip_special_tokens=False, **kwargs):
+            self.temperature = temperature
+            self.max_tokens = max_tokens
+            self.skip_special_tokens = skip_special_tokens
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -104,6 +111,9 @@ class StepAudioTTS:
         except Exception as e:
             logger.error(f"❌ Failed to load model: {e}")
             raise
+
+        if not torch.cuda.is_available():
+            cosyvoice_cuda_graph = False
 
         # Load CosyVoice model
         # Map dtype string to torch dtype

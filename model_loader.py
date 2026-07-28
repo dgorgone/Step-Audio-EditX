@@ -1,16 +1,23 @@
 """
-Unified model loading utility using vLLM for high-performance inference
-Supports ModelScope, HuggingFace and local path loading
+Unified model loading utility supporting vLLM and PyTorch MPS/CPU engines.
+Supports ModelScope, HuggingFace and local path loading.
 """
 import os
 import logging
 import threading
 from typing import Optional
-from transformers import AutoTokenizer
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from funasr_detach import AutoModel
 
-# vLLM imports
-from vllm import LLM, SamplingParams
+# Optional vLLM import
+try:
+    from vllm import LLM, SamplingParams
+    HAS_VLLM = True
+except ImportError:
+    HAS_VLLM = False
+    LLM = None
+    SamplingParams = None
 
 # Global cache for downloaded models to avoid repeated downloads
 _model_download_cache = {}
@@ -25,16 +32,55 @@ class ModelSource:
     AUTO = "auto"
 
 
+class PyTorchCausalLMEngine:
+    """Fallback engine using standard PyTorch / HuggingFace AutoModelForCausalLM for MPS/CPU"""
+    def __init__(self, model, device, torch_dtype):
+        self.model = model
+        self.device = device
+        self.torch_dtype = torch_dtype
+
+    def generate(self, prompts, sampling_params=None, use_tqdm=False, **kwargs):
+        results = []
+        for prompt_dict in prompts:
+            token_ids = prompt_dict["prompt_token_ids"]
+            input_ids = torch.tensor([token_ids], dtype=torch.long, device=self.device)
+            max_tokens = getattr(sampling_params, "max_tokens", 4096) if sampling_params else 4096
+            temperature = getattr(sampling_params, "temperature", 0.7) if sampling_params else 0.7
+
+            with torch.no_grad():
+                gen_kwargs = {
+                    "input_ids": input_ids,
+                    "max_new_tokens": max_tokens,
+                    "do_sample": (temperature > 0),
+                    "eos_token_id": 3,  # <|EOT|>
+                }
+                if temperature > 0:
+                    gen_kwargs["temperature"] = temperature
+
+                outputs = self.model.generate(**gen_kwargs)
+
+            gen_ids = outputs[0][len(token_ids):].cpu().tolist()
+
+            class FakeOutput:
+                def __init__(self, token_ids):
+                    self.token_ids = token_ids
+
+            class FakeRequestOutput:
+                def __init__(self, token_ids):
+                    self.outputs = [FakeOutput(token_ids)]
+
+            results.append(FakeRequestOutput(gen_ids))
+        return results
+
+
 class UnifiedModelLoader:
-    """Unified model loader using vLLM"""
+    """Unified model loader supporting vLLM and PyTorch MPS/CPU"""
 
     def __init__(self):
         self.logger = logging.getLogger(__name__)
 
     def _cached_snapshot_download(self, model_path: str, source: str, **kwargs) -> str:
-        """
-        Cached version of snapshot_download to avoid repeated downloads
-        """
+        """Cached version of snapshot_download to avoid repeated downloads"""
         cache_key = (model_path, source, str(sorted(kwargs.items())))
 
         with _download_cache_lock:
@@ -88,37 +134,12 @@ class UnifiedModelLoader:
         **kwargs
     ) -> tuple:
         """
-        Load model using vLLM for high-performance inference
-
-        Args:
-            model_path: Model path or ID
-            source: Model source (auto/local/modelscope/huggingface)
-            quantization: Quantization method ('awq', 'gptq', 'fp8', or None)
-            tensor_parallel_size: Number of GPUs for tensor parallelism
-            gpu_memory_utilization: GPU memory utilization ratio (0.0-1.0)
-            max_model_len: Maximum sequence length
-            dtype: Data type ('float16', 'bfloat16', 'float32')
-            trust_remote_code: Whether to trust remote code
-            kv_cache_dtype: KV cache dtype (None, 'auto', 'fp8', 'fp8_e5m2', 'fp8_e4m3')
-            max_num_seqs: Maximum number of concurrent sequences
-            max_num_batched_tokens: Maximum tokens per batch
-            **kwargs: Other vLLM parameters
-
-        Returns:
-            Tuple of (llm, tokenizer, model_path)
-
-        Example:
-            >>> loader = UnifiedModelLoader()
-            >>> llm, tokenizer, path = loader.load_model(
-            ...     model_path="/path/to/model",
-            ...     quantization="awq",
-            ...     tensor_parallel_size=2
-            ... )
+        Load model using vLLM if available, or PyTorch MPS/CPU as fallback.
         """
         if source == ModelSource.AUTO:
             source = self.detect_model_source(model_path)
 
-        self.logger.info(f"🚀 Loading vLLM model from {source}: {model_path}")
+        self.logger.info(f"🚀 Loading model from {source}: {model_path}")
         if quantization:
             self.logger.info(f"🔧 Quantization: {quantization}")
 
@@ -130,50 +151,69 @@ class UnifiedModelLoader:
             elif source == ModelSource.HUGGINGFACE:
                 resolved_path = self._cached_snapshot_download(model_path, ModelSource.HUGGINGFACE)
 
-            # Build vLLM arguments
-            llm_kwargs = {
-                "model": resolved_path,
-                "trust_remote_code": trust_remote_code,
-                "tensor_parallel_size": tensor_parallel_size,
-                "gpu_memory_utilization": gpu_memory_utilization,
-                "dtype": dtype,
-                "enforce_eager": enforce_eager,
-            }
-
-            if quantization:
-                llm_kwargs["quantization"] = quantization
-
-            if max_model_len is not None:
-                llm_kwargs["max_model_len"] = max_model_len
-
-            # Memory optimization parameters
-            if kv_cache_dtype is not None:
-                llm_kwargs["kv_cache_dtype"] = kv_cache_dtype
-
-            if max_num_seqs is not None:
-                llm_kwargs["max_num_seqs"] = max_num_seqs
-
-            if max_num_batched_tokens is not None:
-                llm_kwargs["max_num_batched_tokens"] = max_num_batched_tokens
-
-            llm_kwargs.update(kwargs)
-
-            self.logger.info(f"🔧 vLLM config: {llm_kwargs}")
-
-            # Create vLLM LLM instance
-            llm = LLM(**llm_kwargs)
-
-            # Load tokenizer separately (needed for encoding prompts)
+            # Load tokenizer
             tokenizer = AutoTokenizer.from_pretrained(
                 resolved_path,
                 trust_remote_code=True
             )
 
-            self.logger.info(f"✅ Successfully loaded vLLM model")
+            # Check for vLLM availability (CUDA only)
+            if HAS_VLLM and torch.cuda.is_available():
+                self.logger.info("⚡ Using vLLM inference engine (CUDA)")
+                llm_kwargs = {
+                    "model": resolved_path,
+                    "trust_remote_code": trust_remote_code,
+                    "tensor_parallel_size": tensor_parallel_size,
+                    "gpu_memory_utilization": gpu_memory_utilization,
+                    "dtype": dtype,
+                    "enforce_eager": enforce_eager,
+                }
+                if quantization:
+                    llm_kwargs["quantization"] = quantization
+                if max_model_len is not None:
+                    llm_kwargs["max_model_len"] = max_model_len
+                if kv_cache_dtype is not None:
+                    llm_kwargs["kv_cache_dtype"] = kv_cache_dtype
+                if max_num_seqs is not None:
+                    llm_kwargs["max_num_seqs"] = max_num_seqs
+                if max_num_batched_tokens is not None:
+                    llm_kwargs["max_num_batched_tokens"] = max_num_batched_tokens
+                llm_kwargs.update(kwargs)
+
+                llm = LLM(**llm_kwargs)
+                self.logger.info("✅ Successfully loaded vLLM model")
+            else:
+                # PyTorch MPS / CPU fallback engine
+                if torch.backends.mps.is_available():
+                    device = torch.device("mps")
+                    self.logger.info("🍎 Using PyTorch MPS engine (Apple Silicon GPU)")
+                elif torch.cuda.is_available():
+                    device = torch.device("cuda")
+                    self.logger.info("⚡ Using PyTorch CUDA engine")
+                else:
+                    device = torch.device("cpu")
+                    self.logger.info("💻 Using PyTorch CPU engine")
+
+                torch_dtype_map = {
+                    "float16": torch.float16,
+                    "bfloat16": torch.bfloat16,
+                    "float32": torch.float32,
+                }
+                torch_dtype = torch_dtype_map.get(dtype, torch.bfloat16)
+
+                hf_model = AutoModelForCausalLM.from_pretrained(
+                    resolved_path,
+                    trust_remote_code=trust_remote_code,
+                    torch_dtype=torch_dtype,
+                ).to(device)
+
+                llm = PyTorchCausalLMEngine(hf_model, device=device, torch_dtype=torch_dtype)
+                self.logger.info("✅ Successfully loaded PyTorch CausalLM model")
+
             return llm, tokenizer, resolved_path
 
         except Exception as e:
-            self.logger.error(f"❌ Failed to load vLLM model: {e}")
+            self.logger.error(f"❌ Failed to load model: {e}")
             raise
 
     def load_funasr_model(
@@ -183,18 +223,7 @@ class UnifiedModelLoader:
         source: str = ModelSource.AUTO,
         **kwargs
     ) -> AutoModel:
-        """
-        Load FunASR model (for StepAudioTokenizer)
-
-        Args:
-            repo_path: Repository path
-            model_path: Model path or ID
-            source: Model source
-            **kwargs: Other parameters
-
-        Returns:
-            FunASR AutoModel instance
-        """
+        """Load FunASR model (for StepAudioTokenizer)"""
         if source == ModelSource.AUTO:
             source = self.detect_model_source(model_path)
 

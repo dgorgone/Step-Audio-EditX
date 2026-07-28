@@ -18,7 +18,7 @@ class CosyVoiceFrontEnd(object):
                  onnx_provider:str='CUDAExecutionProvider',
                  ):
         super().__init__()
-        assert onnx_provider in ['CUDAExecutionProvider', 'CPUExecutionProvider'], 'invalid onnx provider'
+        assert onnx_provider in ['CUDAExecutionProvider', 'CoreMLExecutionProvider', 'CPUExecutionProvider'], 'invalid onnx provider'
         self.mel_conf = mel_conf
         self.sample_rate = mel_conf['sampling_rate']
         option = onnxruntime.SessionOptions()

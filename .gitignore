@@ -5,3 +5,4 @@ sparse_logs/
 .venv/
 *.log
 .python-version
+*.egg-info/

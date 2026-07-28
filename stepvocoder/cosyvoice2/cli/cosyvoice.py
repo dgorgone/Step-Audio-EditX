@@ -351,7 +351,12 @@ class CosyVoice:
                  enable_cuda_graph: bool = False,
                  dtype=torch.float32,
                  ):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            self.device = torch.device("mps")
+        else:
+            self.device = torch.device("cpu")
         self.dtype = dtype
         # initiate streaming wrapper
         self.model_dir = model_dir

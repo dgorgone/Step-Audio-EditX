@@ -1,7 +1,10 @@
+import torch
 import torchaudio
 import argparse
 import os
-os.environ["VLLM_ATTENTION_BACKEND"] = "TRITON_ATTN"
+
+if torch.cuda.is_available():
+    os.environ["VLLM_ATTENTION_BACKEND"] = "TRITON_ATTN"
 
 from tokenizer import StepAudioTokenizer
 from tts import StepAudioTTS

@@ -19,6 +19,8 @@ except ImportError:
     LLM = None
     SamplingParams = None
 
+from src.model.step_audio import StaticKVCache
+
 # Global cache for downloaded models to avoid repeated downloads
 _model_download_cache = {}
 _download_cache_lock = threading.Lock()
@@ -48,12 +50,28 @@ class PyTorchCausalLMEngine:
             temperature = getattr(sampling_params, "temperature", 0.7) if sampling_params else 0.7
 
             with torch.no_grad():
+                max_cache_len = min(len(token_ids) + max_tokens + 64, 4096)
+                num_heads = self.model.config.num_attention_heads
+                num_groups = getattr(self.model.config, "num_attention_groups", num_heads)
+                head_dim = self.model.config.hidden_size // num_heads
+
+                past_key_values = StaticKVCache(
+                    num_layers=self.model.config.num_hidden_layers,
+                    batch_size=1,
+                    max_seq_len=max_cache_len,
+                    num_groups=num_groups,
+                    head_dim=head_dim,
+                    dtype=self.torch_dtype,
+                    device=self.device
+                )
+
                 gen_kwargs = {
                     "input_ids": input_ids,
                     "max_new_tokens": max_tokens,
                     "do_sample": (temperature > 0),
                     "eos_token_id": None,
                     "use_cache": True,
+                    "past_key_values": past_key_values,
                 }
                 if temperature > 0:
                     gen_kwargs["temperature"] = temperature

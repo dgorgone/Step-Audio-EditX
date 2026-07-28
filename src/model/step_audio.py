@@ -133,6 +133,58 @@ def build_alibi_cache(q_len, total_len, n_heads, dtype, device):
     return bias.type(dtype)
 
 
+class StaticKVCache:
+    def __init__(self, num_layers, batch_size, max_seq_len, num_groups, head_dim, dtype, device):
+        self.is_compileable = False
+        self.num_layers = num_layers
+        self.batch_size = batch_size
+        self.max_seq_len = max_seq_len
+        self.num_groups = num_groups
+        self.head_dim = head_dim
+        self.device = device
+        self.dtype = dtype
+
+        self.key_cache = torch.zeros(
+            (num_layers, batch_size, max_seq_len, num_groups, head_dim),
+            dtype=dtype,
+            device=device
+        )
+        self.value_cache = torch.zeros(
+            (num_layers, batch_size, max_seq_len, num_groups, head_dim),
+            dtype=dtype,
+            device=device
+        )
+        self.current_seq_len = 0
+
+    def update(self, k: torch.Tensor, v: torch.Tensor, layer_idx: int, *args, **kwargs):
+        s_new = k.size(1)
+        if layer_idx == 0 and s_new > 1:
+            self.current_seq_len = 0
+
+        start_pos = self.current_seq_len
+        end_pos = start_pos + s_new
+
+        if end_pos > self.max_seq_len:
+            raise RuntimeError(f"Sequence length {end_pos} exceeds pre-allocated static cache max size {self.max_seq_len}")
+
+        self.key_cache[layer_idx, :, start_pos:end_pos] = k
+        self.value_cache[layer_idx, :, start_pos:end_pos] = v
+
+        if layer_idx == self.num_layers - 1:
+            self.current_seq_len = end_pos
+
+        return (
+            self.key_cache[layer_idx, :, 0:end_pos],
+            self.value_cache[layer_idx, :, 0:end_pos]
+        )
+
+    def get_seq_length(self, layer_idx: int = 0) -> int:
+        return self.current_seq_len
+
+    def get_max_cache_shape(self) -> int:
+        return self.max_seq_len
+
+
 class Step1RMSNorm(torch.nn.Module):
     def __init__(self, hidden_size, dtype=torch.float32, eps=1e-5):
         super().__init__()
@@ -176,7 +228,10 @@ class Step1Attention(torch.nn.Module):
         v = rearrange(v, "b s (g d) -> b s g d", g=self.num_groups)
 
         if past_key_value is not None:
-            if hasattr(past_key_value, "update") and layer_idx is not None:
+            if isinstance(past_key_value, StaticKVCache) and layer_idx is not None:
+                k, v = past_key_value.update(k, v, layer_idx)
+                present = past_key_value
+            elif hasattr(past_key_value, "update") and layer_idx is not None:
                 k_t, v_t = past_key_value.update(k.transpose(1, 2), v.transpose(1, 2), layer_idx)
                 k = k_t.transpose(1, 2)
                 v = v_t.transpose(1, 2)

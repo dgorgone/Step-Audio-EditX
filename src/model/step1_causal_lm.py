@@ -84,21 +84,23 @@ class Step1ForCausalLM(PreTrainedModel, GenerationMixin):
         input_ids=None,
         attention_mask=None,
         past_key_values=None,
+        use_cache=None,
         **kwargs
     ):
-
-
+        use_cache = use_cache if use_cache is not None else self.config.use_cache
         hidden_states = self.model.embed_tokens(input_ids)
 
-        
-
-        hidden_states = self.model(hidden_states)
+        hidden_states, next_past_key_values = self.model(
+            hidden_states,
+            past_key_values=past_key_values,
+            use_cache=use_cache
+        )
 
         logits = self.lm_head(hidden_states)
         
         return CausalLMOutputWithPast(
             logits=logits,
-            past_key_values=None,
+            past_key_values=next_past_key_values,
             hidden_states=None,
             attentions=None
         )

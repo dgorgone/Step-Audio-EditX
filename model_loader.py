@@ -53,7 +53,7 @@ class PyTorchCausalLMEngine:
                     "max_new_tokens": max_tokens,
                     "do_sample": (temperature > 0),
                     "eos_token_id": None,
-                    "use_cache": False,
+                    "use_cache": True,
                 }
                 if temperature > 0:
                     gen_kwargs["temperature"] = temperature

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from einops import rearrange
 import torch.nn.functional
 from dataclasses import dataclass
-from typing import Tuple, Iterable, Optional
+from typing import Tuple, Iterable, Optional, Any
 
 import numpy as np
 import torch
@@ -112,27 +112,24 @@ def mask_to_bias(mask: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
     mask = (1.0 - mask) * -1.0e+10
     return mask
 
-def build_alibi_cache(block_size, n_heads, dtype, device):
-    # get slopes
+def build_alibi_cache(q_len, total_len, n_heads, dtype, device):
     n = 2 ** math.floor(math.log2(n_heads))  # nearest 2**n to n_heads
     m0 = 2.0 ** (-8.0 / n)
-    # 2^(-8/n), 2^(-8*2/n), 2^(-8*3/n), ...
     slopes = torch.pow(m0, torch.arange(1, n+1))
     if n < n_heads:
         m1 = 2.0 ** (-4.0 / n)
-        # 2^(-8/(2n)), 2^(-8*3/(2n)), 2^(-8*5/(2n)), ...
         mm = torch.pow(m1, torch.arange(1, 1 + 2 * (n_heads - n), 2))
         slopes = torch.cat([slopes, mm])
     slopes = slopes.to(device)
 
-    tril = torch.tril(torch.ones(1, 1, block_size, block_size, device=device))
+    q_idx = torch.arange(total_len - q_len, total_len, device=device).view(-1, 1)
+    k_idx = torch.arange(0, total_len, device=device).view(1, -1)
 
-    bias_rows = torch.arange(block_size, device=device).view(1, -1)
-    bias_cols = torch.arange(block_size, device=device).view(-1, 1)
-    bias = -torch.sqrt(bias_cols - bias_rows)
-    bias = bias.view(1, block_size, block_size) * slopes.view(-1, 1, 1)
-    bias = bias.masked_fill(tril == 0, float('-inf'))
-
+    diff = q_idx - k_idx
+    tril = (diff >= 0).unsqueeze(0).unsqueeze(0)
+    diff_clamp = torch.clamp(diff, min=0)
+    bias = -torch.sqrt(diff_clamp.float()).unsqueeze(0) * slopes.view(-1, 1, 1)
+    bias = bias.masked_fill(~tril, float('-inf'))
     return bias.type(dtype)
 
 
@@ -163,7 +160,13 @@ class Step1Attention(torch.nn.Module):
         self.v_proj = torch.nn.Linear(hidden_size, num_groups * self.head_dim, bias=False, dtype=dtype)
         self.o_proj = torch.nn.Linear(hidden_size, hidden_size, bias=False, dtype=dtype)
 
-    def forward(self, x: torch.Tensor):
+    def forward(
+        self,
+        x: torch.Tensor,
+        past_key_value: Optional[Any] = None,
+        use_cache: bool = False,
+        layer_idx: Optional[int] = None
+    ):
         q: torch.Tensor = self.q_proj(x)
         k: torch.Tensor = self.k_proj(x)
         v: torch.Tensor = self.v_proj(x)
@@ -172,20 +175,38 @@ class Step1Attention(torch.nn.Module):
         k = rearrange(k, "b s (g d) -> b s g d", g=self.num_groups)
         v = rearrange(v, "b s (g d) -> b s g d", g=self.num_groups)
 
-        k = k.repeat_interleave(self.num_heads // self.num_groups, dim=-2)
-        v = v.repeat_interleave(self.num_heads // self.num_groups, dim=-2)
+        if past_key_value is not None:
+            if hasattr(past_key_value, "update") and layer_idx is not None:
+                k_t, v_t = past_key_value.update(k.transpose(1, 2), v.transpose(1, 2), layer_idx)
+                k = k_t.transpose(1, 2)
+                v = v_t.transpose(1, 2)
+                present = past_key_value
+            elif isinstance(past_key_value, tuple):
+                k = torch.cat([past_key_value[0], k], dim=1)
+                v = torch.cat([past_key_value[1], v], dim=1)
+                present = (k, v) if use_cache else None
+            else:
+                present = (k, v) if use_cache else None
+        else:
+            present = (k, v) if use_cache else None
 
-        mask = build_alibi_cache(q.size(1), self.num_heads, dtype=q.dtype, device=q.device)
+        k_interleaved = k.repeat_interleave(self.num_heads // self.num_groups, dim=-2)
+        v_interleaved = v.repeat_interleave(self.num_heads // self.num_groups, dim=-2)
+
+        q_len = q.size(1)
+        total_len = k.size(1)
+
+        mask = build_alibi_cache(q_len, total_len, self.num_heads, dtype=q.dtype, device=q.device)
         o: torch.Tensor = torch.nn.functional.scaled_dot_product_attention(
             q.transpose(1, 2),
-            k.transpose(1, 2),
-            v.transpose(1, 2),
+            k_interleaved.transpose(1, 2),
+            v_interleaved.transpose(1, 2),
             attn_mask=mask
         )
         o = o.transpose(1, 2).flatten(-2, -1)
 
         o = self.o_proj(o)
-        return o
+        return o, present
 
 
 class Step1MLP(torch.nn.Module):
@@ -220,20 +241,21 @@ class Step1Layer(torch.nn.Module):
         self.input_layernorm = Step1RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps, dtype=dtype)
         self.post_attention_layernorm = Step1RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps, dtype=dtype)
 
-    def forward(self, x):
-        def f(x):
-            x = self.input_layernorm(x)
-            x = self.self_attn(x)
-            return x
-        x = x + f(x)
+    def forward(self, x, past_key_value=None, use_cache=False, layer_idx=None):
+        x_norm = self.input_layernorm(x)
+        attn_out, present = self.self_attn(
+            x_norm,
+            past_key_value=past_key_value,
+            use_cache=use_cache,
+            layer_idx=layer_idx
+        )
+        x = x + attn_out
 
-        def f(x):
-            x = self.post_attention_layernorm(x)
-            x = self.mlp(x)
-            return x
-        x = x + f(x)
+        x_post = self.post_attention_layernorm(x)
+        mlp_out = self.mlp(x_post)
+        x = x + mlp_out
 
-        return x
+        return x, present
 
 
 class Step1Model(torch.nn.Module):
@@ -241,19 +263,35 @@ class Step1Model(torch.nn.Module):
         super().__init__()
         self.config = config
         self.embed_tokens = torch.nn.Embedding(config.vocab_size, config.hidden_size, dtype=dtype)
-        self.layers = torch.nn.Sequential(*[Step1Layer(config, dtype=dtype) for _ in range(config.num_hidden_layers)])
+        self.layers = torch.nn.ModuleList([Step1Layer(config, dtype=dtype) for _ in range(config.num_hidden_layers)])
         self.norm = Step1RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps, dtype=dtype)
         self.gradient_checkpointing = False
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, past_key_values=None, use_cache=False):
         x = hidden_states
-        if self.gradient_checkpointing and self.training:
-            for layer in self.layers:
-                x = torch.utils.checkpoint.checkpoint(layer, x)
-        else:
-            x = self.layers(x)
+        next_decoder_cache = () if use_cache and not hasattr(past_key_values, "update") else None
+
+        for idx, layer in enumerate(self.layers):
+            if past_key_values is not None:
+                if hasattr(past_key_values, "update"):
+                    past_key_value = past_key_values
+                elif isinstance(past_key_values, (tuple, list)) and idx < len(past_key_values):
+                    past_key_value = past_key_values[idx]
+                else:
+                    past_key_value = None
+            else:
+                past_key_value = None
+
+            x, present = layer(x, past_key_value=past_key_value, use_cache=use_cache, layer_idx=idx)
+
+            if use_cache and not hasattr(past_key_values, "update"):
+                next_decoder_cache = next_decoder_cache + (present,)
+
+        if hasattr(past_key_values, "update"):
+            next_decoder_cache = past_key_values
+
         x = self.norm(x)
-        return x
+        return x, next_decoder_cache
 
 
 class Step1AudioModel(torch.nn.Module):

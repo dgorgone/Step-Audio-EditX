@@ -55,6 +55,13 @@ class StepAudioTokenizer:
 
         self.kms = torch.tensor(np.load(kms_path))
 
+        if torch.cuda.is_available():
+            self.device = 0
+        elif torch.backends.mps.is_available():
+            self.device = "mps"
+        else:
+            self.device = "cpu"
+
         available_providers = onnxruntime.get_available_providers()
         providers = []
         if "CUDAExecutionProvider" in available_providers:
@@ -131,7 +138,7 @@ class StepAudioTokenizer:
                 chunk_size=self.chunk_size,
                 encoder_chunk_look_back=self.encoder_chunk_look_back,
                 decoder_chunk_look_back=self.decoder_chunk_look_back,
-                device=0,
+                device=self.device,
                 is_final=is_final,
                 cache=cache,
             )

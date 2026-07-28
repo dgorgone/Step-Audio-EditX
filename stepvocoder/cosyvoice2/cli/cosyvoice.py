@@ -336,8 +336,10 @@ class CosyVoice_stream_impl_(torch.nn.Module):
         self.chunk_cache_dict.pop(session_id, None)
         self.estimator_prompt_length_dict.pop(session_id, None)
         self.spk_embedding_cache_dict.pop(session_id, None)
-        self.speech_token_dict.pop(session_id, None)
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif torch.backends.mps.is_available():
+            torch.mps.empty_cache()
 
 
 """Keep compatible with cosyvoice1

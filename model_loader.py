@@ -201,11 +201,20 @@ class UnifiedModelLoader:
                 }
                 torch_dtype = torch_dtype_map.get(dtype, torch.bfloat16)
 
-                hf_model = AutoModelForCausalLM.from_pretrained(
-                    resolved_path,
-                    trust_remote_code=trust_remote_code,
-                    torch_dtype=torch_dtype,
-                ).to(device)
+                try:
+                    from src.model.step1_causal_lm import Step1ForCausalLM
+                    hf_model = Step1ForCausalLM.from_pretrained(
+                        resolved_path,
+                        trust_remote_code=trust_remote_code,
+                        torch_dtype=torch_dtype,
+                    ).to(device)
+                except Exception as load_err:
+                    self.logger.warning(f"Could not load using Step1ForCausalLM ({load_err}), trying AutoModelForCausalLM...")
+                    hf_model = AutoModelForCausalLM.from_pretrained(
+                        resolved_path,
+                        trust_remote_code=trust_remote_code,
+                        torch_dtype=torch_dtype,
+                    ).to(device)
 
                 llm = PyTorchCausalLMEngine(hf_model, device=device, torch_dtype=torch_dtype)
                 self.logger.info("✅ Successfully loaded PyTorch CausalLM model")

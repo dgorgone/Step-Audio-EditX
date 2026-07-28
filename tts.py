@@ -37,8 +37,8 @@ class HTTPException(Exception):
 
 class StepAudioTTS:
     """
-    Step Audio TTS wrapper for voice cloning and audio editing tasks
-    Uses vLLM for high-performance inference
+    Step Audio TTS wrapper for voice cloning and audio editing tasks.
+    Supports vLLM (CUDA) and PyTorch (MPS/CPU) inference engines.
     """
 
     def __init__(
@@ -60,7 +60,7 @@ class StepAudioTTS:
         cosyvoice_cuda_graph=True
     ):
         """
-        Initialize StepAudioTTS with vLLM
+        Initialize StepAudioTTS with unified model loader (vLLM or PyTorch MPS/CPU)
 
         Args:
             model_path: Model path

@@ -1,7 +1,9 @@
+import os
 import torch
 if torch.cuda.is_available():
     # Force TRITON_ATTN backend for Step1 model (required for alibi_sqrt support)
     os.environ["VLLM_ATTENTION_BACKEND"] = "TRITON_ATTN"
+
 
 import gradio as gr
 import argparse

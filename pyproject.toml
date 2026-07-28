@@ -17,6 +17,7 @@ dependencies = [
     "sox>=1.4.0",
     "torch-complex>=0.4.4",
     "transformers>=4.40.0",
+    "huggingface-hub>=0.23.0",
     "typer>=0.12.0",
     "whisper>=1.1.10",
 

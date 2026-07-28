@@ -15,18 +15,29 @@ class CosyVoiceFrontEnd(object):
                  mel_conf:Dict,
                  campplus_model:str,
                  speech_tokenizer_model:str,
-                 onnx_provider:str='CUDAExecutionProvider',
+                 onnx_provider:str=None,
                  ):
         super().__init__()
-        assert onnx_provider in ['CUDAExecutionProvider', 'CoreMLExecutionProvider', 'CPUExecutionProvider'], 'invalid onnx provider'
+        available_providers = onnxruntime.get_available_providers()
+        if onnx_provider is None:
+            if "CUDAExecutionProvider" in available_providers:
+                onnx_provider = "CUDAExecutionProvider"
+            elif "CoreMLExecutionProvider" in available_providers:
+                onnx_provider = "CoreMLExecutionProvider"
+            else:
+                onnx_provider = "CPUExecutionProvider"
+        assert onnx_provider in available_providers or onnx_provider in ['CUDAExecutionProvider', 'CoreMLExecutionProvider', 'CPUExecutionProvider'], 'invalid onnx provider'
         self.mel_conf = mel_conf
         self.sample_rate = mel_conf['sampling_rate']
         option = onnxruntime.SessionOptions()
         option.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
         option.intra_op_num_threads = 1
+        providers = [onnx_provider]
+        if "CPUExecutionProvider" not in providers:
+            providers.append("CPUExecutionProvider")
         self.campplus_session = onnxruntime.InferenceSession(
             campplus_model, sess_options=option,
-            providers=["CPUExecutionProvider"]
+            providers=providers
         )
     
     def extract_speech_feat(self, audio:torch.Tensor, audio_sr:int):

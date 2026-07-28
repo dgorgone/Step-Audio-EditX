@@ -1,5 +1,6 @@
 import torch
 import torchaudio
+import soundfile as sf
 import argparse
 import os
 
@@ -291,7 +292,8 @@ def infer():
             prompt_text=args.prompt_text,
             target_text=args.generated_text,
         )
-        torchaudio.save(save_path, output_audio.cpu(), output_sr)
+        output_audio_np = output_audio.cpu().squeeze().numpy()
+        sf.write(save_path, output_audio_np, output_sr)
         print(f"[Saved] {save_path}")
     else:
         save_path = f"{args.output_dir}/test_{args.edit_type}.wav"
@@ -304,7 +306,8 @@ def infer():
             edit_type=args.edit_type,
             edit_info=args.edit_info,
         )
-        torchaudio.save(save_path, output_audio.cpu(), output_sr)
+        output_audio_np = output_audio.cpu().squeeze().numpy()
+        sf.write(save_path, output_audio_np, output_sr)
         print(f"[Saved] {save_path}")
 
 if __name__ == "__main__":

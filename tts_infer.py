@@ -167,7 +167,30 @@ def get_args():
 
 def load_model(args) -> StepAudioTTS:
     step_audio_editx_model_path = args.model_path
-    step_audio_tokenizer_path = args.tokenizer_path
+    
+    source_mapping = {
+        "auto": ModelSource.AUTO,
+        "local": ModelSource.LOCAL,
+        "modelscope": ModelSource.MODELSCOPE,
+        "huggingface": ModelSource.HUGGINGFACE
+    }
+    model_source = source_mapping.get(args.model_source, ModelSource.AUTO)
+
+    if args.tokenizer_path:
+        step_audio_tokenizer_path = args.tokenizer_path
+    else:
+        parent_dir = os.path.dirname(args.model_path)
+        sibling_tokenizer = os.path.join(parent_dir, "Step-Audio-Tokenizer")
+        sub_tokenizer = os.path.join(args.model_path, "Step-Audio-Tokenizer")
+        
+        if model_source in [ModelSource.HUGGINGFACE, ModelSource.MODELSCOPE]:
+            step_audio_tokenizer_path = sibling_tokenizer if parent_dir else "stepfun-ai/Step-Audio-Tokenizer"
+        elif os.path.exists(sibling_tokenizer):
+            step_audio_tokenizer_path = sibling_tokenizer
+        elif os.path.exists(sub_tokenizer):
+            step_audio_tokenizer_path = sub_tokenizer
+        else:
+            step_audio_tokenizer_path = "stepfun-ai/Step-Audio-Tokenizer"
 
     step_audio_tokenizer = StepAudioTokenizer(
         step_audio_tokenizer_path,

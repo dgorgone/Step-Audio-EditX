@@ -18,7 +18,7 @@ from model_loader import model_loader, ModelSource
 class StepAudioTokenizer:
     def __init__(
         self,
-        encoder_path,
+        encoder_path=None,
         model_source=ModelSource.AUTO,
         funasr_model_id="dengcunqin/speech_paraformer-large_asr_nat-zh-cantonese-en-16k-vocab8501-online"
     ):
@@ -30,6 +30,9 @@ class StepAudioTokenizer:
             model_source: Model source (auto/local/modelscope/huggingface)
             funasr_model_id: FunASR model ID or path
         """
+        if not encoder_path:
+            encoder_path = "stepfun-ai/Step-Audio-Tokenizer"
+
         funasr_model_path = os.path.join(encoder_path, funasr_model_id)
         # Load FunASR model - use unified loader to handle all modes
         try:

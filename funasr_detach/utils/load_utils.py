@@ -3,6 +3,7 @@ import io
 import torch
 import numpy as np
 import torchaudio
+import soundfile as sf
 from torch.nn.utils.rnn import pad_sequence
 
 try:
@@ -57,14 +58,22 @@ def load_audio_text_image_video(
         data_or_path_or_list = download_from_url(data_or_path_or_list)
 
     if isinstance(data_or_path_or_list, io.BytesIO):
-        data_or_path_or_list, audio_fs = torchaudio.load(data_or_path_or_list)
+        audio_np, audio_fs = sf.read(data_or_path_or_list, dtype='float32')
+        if audio_np.ndim == 1:
+            data_or_path_or_list = torch.from_numpy(audio_np).unsqueeze(0)
+        else:
+            data_or_path_or_list = torch.from_numpy(audio_np.T)
         if kwargs.get("reduce_channels", True):
             data_or_path_or_list = data_or_path_or_list.mean(0)
     elif isinstance(data_or_path_or_list, str) and os.path.exists(
         data_or_path_or_list
     ):  # local file
         if data_type is None or data_type == "sound":
-            data_or_path_or_list, audio_fs = torchaudio.load(data_or_path_or_list)
+            audio_np, audio_fs = sf.read(data_or_path_or_list, dtype='float32')
+            if audio_np.ndim == 1:
+                data_or_path_or_list = torch.from_numpy(audio_np).unsqueeze(0)
+            else:
+                data_or_path_or_list = torch.from_numpy(audio_np.T)
             if kwargs.get("reduce_channels", True):
                 data_or_path_or_list = data_or_path_or_list.mean(0)
         elif data_type == "text" and tokenizer is not None:

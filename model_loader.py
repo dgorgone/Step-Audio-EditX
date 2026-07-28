@@ -52,7 +52,6 @@ class PyTorchCausalLMEngine:
                     "input_ids": input_ids,
                     "max_new_tokens": max_tokens,
                     "do_sample": (temperature > 0),
-                    "eos_token_id": 3,  # <|EOT|>
                     "use_cache": False,
                 }
                 if temperature > 0:

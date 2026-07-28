@@ -227,8 +227,9 @@ class StepAudioTokenizer:
         indices_list = []
         start_len = 0
         for x_len in x_lens:
-            end_len = start_len + end_len
+            end_len = start_len + x_len
             indices_list.append(indices[start_len:end_len])
+            start_len = end_len
         return indices_list
 
     def merge_vq0206_to_token_str(self, vq02, vq06):

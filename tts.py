@@ -333,7 +333,10 @@ class StepAudioTTS:
             {"role": "user", "content": f"{instruct_prefix}\n{audio_token_str}\n"}
         ]
 
-        return self.tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+        res = self.tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+        if isinstance(res, dict) or hasattr(res, "get"):
+            return list(res["input_ids"])
+        return list(res)
 
 
     def _encode_audio_edit_clone_prompt(
@@ -350,7 +353,10 @@ class StepAudioTTS:
             {"role": "user", "content": f"{text}"}
         ]
 
-        return self.tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+        res = self.tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+        if isinstance(res, dict) or hasattr(res, "get"):
+            return list(res["input_ids"])
+        return list(res)
 
 
     def detect_instruction_name(self, text):

@@ -242,7 +242,15 @@ class AutoModel:
         kwargs = self.kwargs if kwargs is None else kwargs
         kwargs.update(cfg)
         model = self.model if model is None else model
-        model = model.cuda()
+        device = kwargs.get("device")
+        if device:
+            model = model.to(device)
+        elif torch.cuda.is_available():
+            model = model.cuda()
+        elif torch.backends.mps.is_available():
+            model = model.to("mps")
+        else:
+            model = model.to("cpu")
         model.eval()
 
         batch_size = kwargs.get("batch_size", 1)
@@ -301,7 +309,10 @@ class AutoModel:
         if pbar:
             # pbar.update(1)
             pbar.set_description(f"rtf_avg: {time_escape_total/time_speech_total:0.3f}")
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif torch.backends.mps.is_available():
+            torch.mps.empty_cache()
         return asr_result_list
 
     def inference_with_vad(self, input, input_len=None, **cfg):
@@ -545,7 +556,15 @@ class AutoModel:
         kwargs = self.kwargs if kwargs is None else kwargs
         kwargs.update(cfg)
         model = self.model if model is None else model
-        model = model.cuda()
+        device = kwargs.get("device")
+        if device:
+            model = model.to(device)
+        elif torch.cuda.is_available():
+            model = model.cuda()
+        elif torch.backends.mps.is_available():
+            model = model.to("mps")
+        else:
+            model = model.to("cpu")
         model.eval()
 
         batch_size = kwargs.get("batch_size", 1)
@@ -571,5 +590,8 @@ class AutoModel:
                 results, meta_data, cache = model.infer_encoder(**batch, **kwargs)
             asr_result_list.extend(results)
 
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif torch.backends.mps.is_available():
+            torch.mps.empty_cache()
         return asr_result_list, cache
